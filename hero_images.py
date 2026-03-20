@@ -25,6 +25,13 @@ hero_image_paths = {
         "Hela": "images/duelist_hela.PNG",
         "Winter Soldier": "images/duelist_wintersoldier.PNG",
         "Wolverine": "images/duelist_wolverine.PNG",
+        "Phoenix": "images/duelist_phoenix.PNG",
+        "Daredevil": "images/duelist_daredevil.PNG",
+        "Blade": "images/duelist_blade.PNG",
+        "Human Torch": "images/duelist_humantorch.PNG",
+        "Mr. Fantastic": "images/duelist_mrfantastic.PNG",
+        "Deadpool": "images/duelist_deadpool.PNG",
+        "Elsa Bloodstone": "images/duelist_elsa.PNG",
     },
     "strategist": {
         "Jeff the Land Shark": "images/strat_jeff.png",
@@ -34,6 +41,11 @@ hero_image_paths = {
         "Luna Snow": "images/strat_luna.PNG",
         "Rocket Raccoon": "images/strat_raccoon.PNG",
         "Mantis": "images/strat_mantis.PNG",
+        "Invisible Woman": "images/strat_invisiblewoman.PNG",
+        "Gambit": "images/strat_gambit.PNG",
+        "Deadpool": "images/strat_deadpool.PNG",
+        "Ultron": "images/strat_ultron.PNG",
+        "White Fox": "images/strat_whitefox.PNG",
     },
     "vanguard": {
         "Thor": "images/vanguard_thor.PNG",
@@ -44,14 +56,19 @@ hero_image_paths = {
         "Hulk": "images/vanguard_hulk.PNG",
         "Magneto": "images/vanguard_magento.PNG",
         "Peni Parker": "images/vanguard_PeniParker.PNG",
+        "Rogue": "images/vanguard_rogue.PNG",
+        "Emma Frost": "images/vanguard_emmafrost.PNG",
+        "Deadpool": "images/vanguard_deadpool.PNG",
+        "The Thing": "images/vanguard_thing.PNG",
+        "Angela": "images/vanguard_angela.PNG",
     },
 }
 
 # Screen coordinates for role selection buttons (for 1920x1080 resolution)
-duelist_button_coords = (1775, 364)
-strategist_button_coords = (1817, 442)  # Renamed from strat_button_coords
-vanguard_button_coords = (1733, 281)
-lock_button_coords = (1660, 725)
+duelist_button_coords = (3650, 285)
+strategist_button_coords = (3696, 361)
+vanguard_button_coords = (3596, 223)
+lock_button_coords = (3600, 726)
 
 # Game indicator image for detecting hero selection screen
 game_indicator_path = "images/game_indicator.PNG"

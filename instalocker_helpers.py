@@ -13,7 +13,14 @@ Version: 1.0.0
 
 import tkinter as tk
 from PIL import Image, ImageTk
-from hero_images import hero_image_paths, game_indicator_path
+from hero_images import (
+    hero_image_paths,
+    game_indicator_path,
+    duelist_button_coords,
+    strategist_button_coords,
+    vanguard_button_coords,
+    lock_button_coords,
+)
 import pyautogui
 import time
 import cv2
@@ -31,8 +38,15 @@ current_category: Optional[str] = None
 HERO_BUTTON_SIZE = (100, 100)
 HERO_DISPLAY_SIZE = (200, 200)
 MAX_COLUMNS = 4
-DETECTION_CONFIDENCE = 0.8
+DETECTION_CONFIDENCE = 0.65
 CLICK_DELAY = 0.1
+
+# Multi-monitor support
+# MONITOR_OFFSET_X is the X pixel offset of the monitor the game runs on.
+# Detected via xrandr: DP-0 (primary) is at x=1920, HDMI-0 (left) is at x=0.
+MONITOR_OFFSET_X = 1920
+GAME_MONITOR_WIDTH = 1920
+GAME_MONITOR_HEIGHT = 1080
 
 def update_hero_buttons_gui(selected_category: str, frame_heroes: tk.Frame, root: tk.Tk) -> None:
     """
@@ -205,10 +219,13 @@ def start_game_monitoring(hero_name: str, selected_category: str) -> None:
     
     def monitor():
         print(f"🔍 Monitoring for game start... Will auto-lock {hero_name}")
-        
-        # Wait for game detection (simplified for now)
-        time.sleep(2)  # Give user time to get into game
-        
+
+        # Poll until the hero selection screen is detected
+        while not detect_hero_selection_screen():
+            time.sleep(1)
+
+        print(f"✅ Hero selection screen detected — locking {hero_name}")
+        time.sleep(0.5)  # Brief pause for screen to fully load
         try:
             lock_hero_in_game(hero_name, selected_category)
         except Exception as e:
@@ -228,11 +245,12 @@ def detect_hero_selection_screen() -> bool:
             print("Game indicator image not found")
             return True  # Assume ready if no indicator
             
-        screen = pyautogui.screenshot()
-        screen_np = np.array(screen)
-        
+        region = (MONITOR_OFFSET_X, 0, GAME_MONITOR_WIDTH, GAME_MONITOR_HEIGHT)
+        screen = pyautogui.screenshot(region=region)
+        screen_np = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+
         indicator = cv2.imread(game_indicator_path)
-        
+
         # Use template matching to find the indicator
         result = cv2.matchTemplate(screen_np, indicator, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
@@ -241,7 +259,7 @@ def detect_hero_selection_screen() -> bool:
         
     except Exception as e:
         print(f"Error detecting game screen: {e}")
-        return True  # Assume ready on error
+        return False  # Assume not ready on error
 
 
 def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
@@ -263,11 +281,11 @@ def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
         
         # Click category button first
         if selected_category == "duelist":
-            pyautogui.click(1775, 364)
+            pyautogui.click(duelist_button_coords[0], duelist_button_coords[1])
         elif selected_category == "strategist":
-            pyautogui.click(1817, 442)
+            pyautogui.click(strategist_button_coords[0], strategist_button_coords[1])
         elif selected_category == "vanguard":
-            pyautogui.click(1733, 281)
+            pyautogui.click(vanguard_button_coords[0], vanguard_button_coords[1])
         else:
             print(f"Unknown category: {selected_category}")
             return False
@@ -288,7 +306,7 @@ def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
             
             # Click lock button multiple times to ensure it registers
             for _ in range(3):
-                pyautogui.click(1660, 725)  # Primary lock button
+                pyautogui.click(lock_button_coords[0], lock_button_coords[1])
                 time.sleep(CLICK_DELAY)
             
             print(f"✅ Successfully locked {hero_name}!")
@@ -313,8 +331,9 @@ def find_hero_on_screen(hero_img_path: str) -> Optional[Tuple[int, int]]:
         Tuple of (x, y) coordinates if found, None otherwise
     """
     try:
-        # Take screenshot
-        screen = pyautogui.screenshot()
+        # Take screenshot of game monitor only
+        region = (MONITOR_OFFSET_X, 0, GAME_MONITOR_WIDTH, GAME_MONITOR_HEIGHT)
+        screen = pyautogui.screenshot(region=region)
         screen_np = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
         
         # Load hero template
@@ -329,8 +348,9 @@ def find_hero_on_screen(hero_img_path: str) -> Optional[Tuple[int, int]]:
         
         if max_val > DETECTION_CONFIDENCE:
             # Calculate center of matched region
+            # Add MONITOR_OFFSET_X because coordinates are relative to the region screenshot
             template_height, template_width = hero_template.shape[:2]
-            center_x = max_loc[0] + template_width // 2
+            center_x = MONITOR_OFFSET_X + max_loc[0] + template_width // 2
             center_y = max_loc[1] + template_height // 2
             return (center_x, center_y)
         else:
