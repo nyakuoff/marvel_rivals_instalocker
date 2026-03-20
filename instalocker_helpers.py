@@ -20,8 +20,11 @@ from hero_images import (
     strategist_button_coords,
     vanguard_button_coords,
     lock_button_coords,
+    wheel_scroll_coords,
+    hero_scroll_steps,
 )
 import pyautogui
+import mss
 import time
 import cv2
 import numpy as np
@@ -39,7 +42,7 @@ HERO_BUTTON_SIZE = (100, 100)
 HERO_DISPLAY_SIZE = (200, 200)
 MAX_COLUMNS = 4
 DETECTION_CONFIDENCE = 0.65
-CLICK_DELAY = 0.1
+CLICK_DELAY = 0.05
 
 # Multi-monitor support
 # MONITOR_OFFSET_X is the X pixel offset of the monitor the game runs on.
@@ -47,6 +50,16 @@ CLICK_DELAY = 0.1
 MONITOR_OFFSET_X = 1920
 GAME_MONITOR_WIDTH = 1920
 GAME_MONITOR_HEIGHT = 1080
+
+# Restrict hero template search to the wheel area (right portion) for faster detection.
+# (x_offset, y_offset, width, height) relative to game monitor top-left.
+HERO_WHEEL_REGION = (900, 0, 1020, 750)
+
+# Restrict indicator search to where the CONFIRM button lives (faster polling).
+INDICATOR_REGION = (1400, 620, 480, 220)
+
+# Cache for CV2 grayscale templates — loaded from disk once, then reused.
+cv_template_cache: dict = {}
 
 def update_hero_buttons_gui(selected_category: str, frame_heroes: tk.Frame, root: tk.Tk) -> None:
     """
@@ -220,12 +233,12 @@ def start_game_monitoring(hero_name: str, selected_category: str) -> None:
     def monitor():
         print(f"🔍 Monitoring for game start... Will auto-lock {hero_name}")
 
-        # Poll until the hero selection screen is detected
+        # Poll as fast as possible — mss grabs are ~1ms so CPU use stays low.
+        # A 10ms yield just prevents 100% core saturation.
         while not detect_hero_selection_screen():
-            time.sleep(1)
+            time.sleep(0.01)
 
         print(f"✅ Hero selection screen detected — locking {hero_name}")
-        time.sleep(0.5)  # Brief pause for screen to fully load
         try:
             lock_hero_in_game(hero_name, selected_category)
         except Exception as e:
@@ -244,19 +257,25 @@ def detect_hero_selection_screen() -> bool:
         if not os.path.exists(game_indicator_path):
             print("Game indicator image not found")
             return True  # Assume ready if no indicator
-            
-        region = (MONITOR_OFFSET_X, 0, GAME_MONITOR_WIDTH, GAME_MONITOR_HEIGHT)
-        screen = pyautogui.screenshot(region=region)
-        screen_np = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
 
-        indicator = cv2.imread(game_indicator_path)
+        # Search only the small region where the CONFIRM button lives (much faster)
+        rx, ry, rw, rh = INDICATOR_REGION
+        monitor = {"top": ry, "left": MONITOR_OFFSET_X + rx, "width": rw, "height": rh}
+        with mss.mss() as sct:
+            screen_np = np.array(sct.grab(monitor))
+        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
 
-        # Use template matching to find the indicator
-        result = cv2.matchTemplate(screen_np, indicator, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
+        # Load and cache indicator template in grayscale
+        if game_indicator_path not in cv_template_cache:
+            t = cv2.imread(game_indicator_path, cv2.IMREAD_GRAYSCALE)
+            cv_template_cache[game_indicator_path] = t
+        indicator_gray = cv_template_cache[game_indicator_path]
+
+        result = cv2.matchTemplate(screen_gray, indicator_gray, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+
         return max_val > DETECTION_CONFIDENCE
-        
+
     except Exception as e:
         print(f"Error detecting game screen: {e}")
         return False  # Assume not ready on error
@@ -291,7 +310,20 @@ def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
             return False
             
         time.sleep(CLICK_DELAY)
-        
+
+        scroll_steps = hero_scroll_steps.get(hero_name, 0)
+        if scroll_steps > 0:
+            # Reset wheel to top, then scroll down to the hero's position.
+            # One event per loop because on Linux pyautogui.scroll(N) fires only once.
+            for _ in range(30):
+                pyautogui.scroll(1, wheel_scroll_coords[0], wheel_scroll_coords[1])
+                time.sleep(0.03)
+            time.sleep(0.05)
+            for _ in range(scroll_steps):
+                pyautogui.scroll(-1, wheel_scroll_coords[0], wheel_scroll_coords[1])
+                time.sleep(0.03)
+            time.sleep(0.05)
+
         # Find and click the hero
         hero_img_path = hero_image_paths[selected_category].get(hero_name)
         if not hero_img_path or not os.path.exists(hero_img_path):
@@ -304,8 +336,8 @@ def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
             pyautogui.click(hero_location[0], hero_location[1])
             time.sleep(CLICK_DELAY)
             
-            # Click lock button multiple times to ensure it registers
-            for _ in range(3):
+            # Click lock button twice to ensure it registers
+            for _ in range(2):
                 pyautogui.click(lock_button_coords[0], lock_button_coords[1])
                 time.sleep(CLICK_DELAY)
             
@@ -323,40 +355,43 @@ def lock_hero_in_game(hero_name: str, selected_category: str) -> bool:
 def find_hero_on_screen(hero_img_path: str) -> Optional[Tuple[int, int]]:
     """
     Find hero location on screen using template matching.
-    
+
     Args:
         hero_img_path: Path to hero image file
-        
+
     Returns:
         Tuple of (x, y) coordinates if found, None otherwise
     """
     try:
-        # Take screenshot of game monitor only
-        region = (MONITOR_OFFSET_X, 0, GAME_MONITOR_WIDTH, GAME_MONITOR_HEIGHT)
-        screen = pyautogui.screenshot(region=region)
-        screen_np = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
-        
-        # Load hero template
-        hero_template = cv2.imread(hero_img_path)
+        # Screenshot only the hero wheel region (smaller area = faster match)
+        rx, ry, rw, rh = HERO_WHEEL_REGION
+        monitor = {"top": ry, "left": MONITOR_OFFSET_X + rx, "width": rw, "height": rh}
+        with mss.mss() as sct:
+            screen_np = np.array(sct.grab(monitor))
+        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
+
+        # Load and cache hero template in grayscale (avoids disk reads on retry)
+        if hero_img_path not in cv_template_cache:
+            t = cv2.imread(hero_img_path, cv2.IMREAD_GRAYSCALE)
+            cv_template_cache[hero_img_path] = t
+        hero_template = cv_template_cache[hero_img_path]
+
         if hero_template is None:
             print(f"Failed to load template: {hero_img_path}")
             return None
-            
-        # Perform template matching
-        result = cv2.matchTemplate(screen_np, hero_template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
+
+        result = cv2.matchTemplate(screen_gray, hero_template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
         if max_val > DETECTION_CONFIDENCE:
-            # Calculate center of matched region
-            # Add MONITOR_OFFSET_X because coordinates are relative to the region screenshot
             template_height, template_width = hero_template.shape[:2]
-            center_x = MONITOR_OFFSET_X + max_loc[0] + template_width // 2
-            center_y = max_loc[1] + template_height // 2
+            center_x = MONITOR_OFFSET_X + rx + max_loc[0] + template_width // 2
+            center_y = ry + max_loc[1] + template_height // 2
             return (center_x, center_y)
         else:
-            print(f"Hero detection confidence too low: {max_val}")
+            print(f"Hero detection confidence too low: {max_val:.2f}")
             return None
-            
+
     except Exception as e:
         print(f"Error in template matching: {e}")
         return None
@@ -364,4 +399,4 @@ def find_hero_on_screen(hero_img_path: str) -> Optional[Tuple[int, int]]:
 
 # Disable pyautogui failsafe for smoother operation
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.05  # Small pause between actions
+pyautogui.PAUSE = 0  # No automatic inter-call delay — we add explicit sleeps only where needed

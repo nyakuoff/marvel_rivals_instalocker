@@ -18,6 +18,7 @@ BUTTONS = [
     ("strategist_button_coords",  "Hover over the STRATEGIST role button"),
     ("vanguard_button_coords",    "Hover over the VANGUARD role button"),
     ("lock_button_coords",        "Hover over the LOCK / CONFIRM button"),
+    ("wheel_scroll_coords",       "Hover anywhere on the HERO WHEEL (center of the circular portrait area)"),
 ]
 
 def wait_for_keypress():
