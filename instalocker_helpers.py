@@ -36,10 +36,11 @@ from typing import Optional, Tuple
 locked_hero: Optional[str] = None
 hero_images_cache = {}
 current_category: Optional[str] = None
+_cancel_event = __import__('threading').Event()
 
 # Configuration
-HERO_BUTTON_SIZE = (100, 100)
-HERO_DISPLAY_SIZE = (200, 200)
+HERO_BUTTON_SIZE = (90, 90)
+HERO_DISPLAY_SIZE = (56, 56)
 MAX_COLUMNS = 4
 DETECTION_CONFIDENCE = 0.65
 CLICK_DELAY = 0.05
@@ -72,15 +73,17 @@ def update_hero_buttons_gui(selected_category: str, frame_heroes: tk.Frame, root
     """
     global current_category
     current_category = selected_category
-    
+
     # Clear existing hero buttons
     for widget in frame_heroes.winfo_children():
         widget.destroy()
 
+    frame_heroes.configure(bg="#1a1d27")
+
     if selected_category not in hero_image_paths:
         print(f"Warning: Unknown category '{selected_category}'")
         return
-        
+
     heroes = list(hero_image_paths[selected_category].keys())
     row, col = 0, 0
 
@@ -92,7 +95,7 @@ def update_hero_buttons_gui(selected_category: str, frame_heroes: tk.Frame, root
                 if not os.path.exists(hero_img_path):
                     print(f"Warning: Image not found for {hero}: {hero_img_path}")
                     continue
-                    
+
                 hero_img = Image.open(hero_img_path)
                 hero_img = hero_img.resize(HERO_BUTTON_SIZE, Image.Resampling.LANCZOS)
                 hero_img_tk = ImageTk.PhotoImage(hero_img)
@@ -100,28 +103,35 @@ def update_hero_buttons_gui(selected_category: str, frame_heroes: tk.Frame, root
             else:
                 hero_img_tk = hero_images_cache[hero]
 
-            # Create hero button with improved styling
+            # Container: image button + name label stacked
+            cell = tk.Frame(frame_heroes, bg="#1a1d27", cursor="hand2")
+            cell.grid(row=row, column=col, padx=5, pady=5)
+
             hero_button = tk.Button(
-                frame_heroes,
+                cell,
                 image=hero_img_tk,
                 command=lambda h=hero: select_hero(h, selected_category, root),
-                relief="raised",
-                borderwidth=2,
-                bg="#F3F4F6",
-                activebackground="#E5E7EB"
+                relief="flat",
+                borderwidth=0,
+                bg="#22263a",
+                activebackground="#2d3348"
             )
             hero_button.image = hero_img_tk  # Prevent garbage collection
-            hero_button.grid(row=row, column=col, padx=5, pady=5)
-            
-            # Add tooltip with hero name
-            create_tooltip(hero_button, hero)
+            hero_button.pack()
+
+            short = hero if len(hero) <= 13 else hero[:12] + "…"
+            tk.Label(
+                cell, text=short,
+                font=("Arial", 7), fg="#94a3b8", bg="#1a1d27",
+                width=11
+            ).pack()
 
             # Update grid position
             col += 1
             if col >= MAX_COLUMNS:
                 col = 0
                 row += 1
-                
+
         except Exception as e:
             print(f"Error loading hero {hero}: {e}")
             continue
@@ -156,29 +166,23 @@ def select_category(category: str, frame_heroes: tk.Frame, root: tk.Tk) -> None:
         frame_heroes: The frame containing hero buttons
         root: The main window
     """
-    print(f"Selected category: {category}")
     update_hero_buttons_gui(category, frame_heroes, root)
 
 
+_gui_hero_callback = None  # Set by GUI to intercept hero clicks
+
+
 def select_hero(hero_name: str, selected_category: str, root: tk.Tk) -> None:
-    """
-    Select a hero and initiate the locking process.
-    
-    Args:
-        hero_name: Name of the hero to select
-        selected_category: The category the hero belongs to
-        root: The main window
-    """
     global locked_hero
     locked_hero = hero_name
-    
     print(f"Selected hero: {hero_name} ({selected_category})")
-    
-    display_locked_hero_message(root, hero_name)
-    display_hero_image(hero_name, selected_category, root)
-    
-    # Start monitoring for game in a separate thread to avoid blocking GUI
-    start_game_monitoring(hero_name, selected_category)
+    if _gui_hero_callback:
+        _gui_hero_callback(hero_name, selected_category)
+    else:
+        # Fallback: start monitoring immediately (no GUI confirm button)
+        display_locked_hero_message(root, hero_name)
+        display_hero_image(hero_name, selected_category, root)
+        start_game_monitoring(hero_name, selected_category)
 
 
 def display_hero_image(hero_name: str, selected_category: str, root: tk.Tk) -> None:
@@ -197,10 +201,6 @@ def display_hero_image(hero_name: str, selected_category: str, root: tk.Tk) -> N
         if hasattr(root, "hero_label"):
             root.hero_label.config(image=hero_img_tk)
             root.hero_label.image = hero_img_tk
-        else:
-            root.hero_label = tk.Label(root, image=hero_img_tk, bg="#F9FAFB")
-            root.hero_label.image = hero_img_tk
-            root.hero_label.pack(pady=10)
             
     except Exception as e:
         print(f"Error displaying hero image: {e}")
@@ -208,19 +208,16 @@ def display_hero_image(hero_name: str, selected_category: str, root: tk.Tk) -> N
 
 def display_locked_hero_message(root: tk.Tk, hero_name: str) -> None:
     """Display the locked hero message in the GUI."""
-    message = f"🎯 Ready to lock: {hero_name}"
-    
+    message = f"🎯  {hero_name}"
+
     if hasattr(root, "locked_hero_label"):
-        root.locked_hero_label.config(text=message)
-    else:
-        root.locked_hero_label = tk.Label(
-            root, 
-            text=message, 
-            font=("Arial", 14, "bold"),
-            fg="#059669",
-            bg="#F9FAFB"
-        )
-        root.locked_hero_label.pack(pady=10)
+        root.locked_hero_label.config(text=message, fg="#10b981")
+
+
+def cancel_monitoring() -> None:
+    """Signal any running monitor thread to stop."""
+    _cancel_event.set()
+    print("🛑 Auto-lock cancelled")
 
 
 def start_game_monitoring(hero_name: str, selected_category: str) -> None:
@@ -231,12 +228,16 @@ def start_game_monitoring(hero_name: str, selected_category: str) -> None:
     import threading
     
     def monitor():
+        _cancel_event.clear()
         print(f"🔍 Monitoring for game start... Will auto-lock {hero_name}")
 
         # Poll as fast as possible — mss grabs are ~1ms so CPU use stays low.
         # A 10ms yield just prevents 100% core saturation.
-        while not detect_hero_selection_screen():
+        while not _cancel_event.is_set() and not detect_hero_selection_screen():
             time.sleep(0.01)
+
+        if _cancel_event.is_set():
+            return
 
         print(f"✅ Hero selection screen detected — locking {hero_name}")
         try:
